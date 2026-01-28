@@ -1,1 +1,13 @@
-{}
+{
+  "upstream": {
+    "owner": "telemt",
+    "repo": "telemt",
+    "ref": "main"
+  },
+  "upstream_sha": "94750a27490802a18a1397160ac4836e68431690",
+  "base_images": {
+    "rust_alpine_manifest_digest": "sha256:69d7b9d9aeaf108a1419d9a7fcf7860dcc043e9dbd1ab7ce88e44228774d99e9",
+    "distroless_static_nonroot_manifest_digest": "sha256:cba10d7abd3e203428e86f5b2d7fd5eb7d8987c387864ae4996cf97191b33764"
+  },
+  "built_at_utc": "2026-01-28T13:32:03Z"
+}
