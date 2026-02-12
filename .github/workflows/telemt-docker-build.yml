@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Force build even if upstream/base images did not change"
+        description: "Force build even if no new upstream release"
         type: boolean
         default: false
 
   schedule:
-    # каждые 6 часов, на 17-й минуте
+    # проверяем каждые 6 часов, появился ли новый релиз
     - cron: "17 */6 * * *"
 
   push:
-    branches: [ "master" ]
+    branches: ["master"]
     paths:
       - "Dockerfile"
       - ".github/workflows/telemt-docker-build.yml"
@@ -30,7 +30,6 @@ env:
 
   UPSTREAM_OWNER: telemt
   UPSTREAM_REPO: telemt
-  UPSTREAM_REF: main
 
   RUST_IMAGE: docker.io/library/rust:alpine
   DISTROLESS_IMAGE: gcr.io/distroless/static:nonroot
@@ -59,7 +58,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Compute upstream SHA + base image digests, compare with state
+      - name: Fetch latest upstream release and compare with state
         id: check
         shell: bash
         run: |
@@ -67,60 +66,84 @@ jobs:
 
           mkdir -p "$(dirname "${STATE_FILE}")"
 
-          # read previous state (if any)
-          prev_upstream_sha=""
-          prev_rust_digest=""
-          prev_distroless_digest=""
+          # ── read previous state ──
+          prev_release_tag=""
+          prev_release_sha=""
 
           if [ -f "${STATE_FILE}" ]; then
-            prev_upstream_sha="$(jq -r '.upstream_sha // ""' "${STATE_FILE}")"
-            prev_rust_digest="$(jq -r '.base_images.rust_alpine_manifest_digest // ""' "${STATE_FILE}")"
-            prev_distroless_digest="$(jq -r '.base_images.distroless_static_nonroot_manifest_digest // ""' "${STATE_FILE}")"
+            prev_release_tag="$(jq -r '.release_tag // ""' "${STATE_FILE}")"
+            prev_release_sha="$(jq -r '.release_sha // ""' "${STATE_FILE}")"
           fi
 
-          # upstream head sha (authenticated to reduce rate-limit issues)
-          upstream_sha="$(
+          # ── fetch latest release (not pre-release, not draft) ──
+          release_json="$(
             curl -fsSL \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${{ github.token }}" \
-              "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/commits/${UPSTREAM_REF}" \
-            | jq -r '.sha'
+              "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest"
           )"
 
-          # manifest-list digest for tags (multi-arch): use buildx imagetools inspect
-          rust_digest="$(
-            docker buildx imagetools inspect "${RUST_IMAGE}" --format '{{json .Manifest}}' \
-            | jq -r '.digest'
-          )"
+          release_tag="$(echo "${release_json}" | jq -r '.tag_name')"
+          release_sha="$(echo "${release_json}" | jq -r '.target_commitish')"
 
-          distroless_digest="$(
-            docker buildx imagetools inspect "${DISTROLESS_IMAGE}" --format '{{json .Manifest}}' \
-            | jq -r '.digest'
-          )"
+          # target_commitish может быть веткой, а не SHA — резолвим в точный коммит
+          if [[ "${release_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            : # уже SHA
+          else
+            # resolve tag → SHA через git refs
+            release_sha="$(
+              curl -fsSL \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/git/ref/tags/${release_tag}" \
+              | jq -r '
+                  if .object.type == "tag" then .object.url
+                  else .object.sha
+                  end
+                '
+            )"
 
+            # если annotated tag — нужен ещё один запрос
+            if [[ "${release_sha}" == http* ]]; then
+              release_sha="$(
+                curl -fsSL \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer ${{ github.token }}" \
+                  "${release_sha}" \
+                | jq -r '.object.sha'
+              )"
+            fi
+          fi
+
+          # ── compare ──
           changed=false
-          if [ -z "${prev_upstream_sha}" ] || [ "${prev_upstream_sha}" != "${upstream_sha}" ]; then changed=true; fi
-          if [ -z "${prev_rust_digest}" ] || [ "${prev_rust_digest}" != "${rust_digest}" ]; then changed=true; fi
-          if [ -z "${prev_distroless_digest}" ] || [ "${prev_distroless_digest}" != "${distroless_digest}" ]; then changed=true; fi
+          if [ -z "${prev_release_tag}" ] || [ "${prev_release_tag}" != "${release_tag}" ]; then
+            changed=true
+          fi
 
-          short_sha="${upstream_sha:0:12}"
+          short_sha="${release_sha:0:12}"
+
+          # sanitize tag for docker (replace + with -)
+          docker_tag="$(echo "${release_tag}" | sed 's/[^a-zA-Z0-9._-]/-/g')"
 
           {
             echo "changed=${changed}"
-            echo "upstream_sha=${upstream_sha}"
+            echo "release_tag=${release_tag}"
+            echo "docker_tag=${docker_tag}"
+            echo "release_sha=${release_sha}"
             echo "short_sha=${short_sha}"
-            echo "rust_digest=${rust_digest}"
-            echo "distroless_digest=${distroless_digest}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Build decision (log)
         shell: bash
         run: |
           echo "changed=${{ steps.check.outputs.changed }}"
-          echo "upstream_sha=${{ steps.check.outputs.upstream_sha }}"
-          echo "rust_digest=${{ steps.check.outputs.rust_digest }}"
-          echo "distroless_digest=${{ steps.check.outputs.distroless_digest }}"
+          echo "release_tag=${{ steps.check.outputs.release_tag }}"
+          echo "release_sha=${{ steps.check.outputs.release_sha }}"
+          echo "force=${{ github.event.inputs.force }}"
+          echo "event=${{ github.event_name }}"
 
+      # ── Skip everything below when no new release and not forced ──
       - name: Build and push (multi-arch)
         if: |
           steps.check.outputs.changed == 'true' ||
@@ -135,20 +158,22 @@ jobs:
 
           tags: |
             ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.check.outputs.docker_tag }}
             ${{ env.IMAGE_NAME }}:telemt-${{ steps.check.outputs.short_sha }}
 
           build-args: |
-            TELEMT_REPO=https://github.com/telemt/telemt.git
-            TELEMT_REF=${{ steps.check.outputs.upstream_sha }}
+            TELEMT_REPO=https://github.com/${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO }}.git
+            TELEMT_REF=${{ steps.check.outputs.release_tag }}
 
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
           labels: |
             org.opencontainers.image.source=${{ github.repositoryUrl }}
-            org.opencontainers.image.revision=${{ steps.check.outputs.upstream_sha }}
+            org.opencontainers.image.revision=${{ steps.check.outputs.release_sha }}
+            org.opencontainers.image.version=${{ steps.check.outputs.release_tag }}
 
-      - name: Update state file (only when auto-change detected)
+      - name: Update state file
         if: steps.check.outputs.changed == 'true'
         shell: bash
         run: |
@@ -159,22 +184,16 @@ jobs:
           jq -n \
             --arg upstream_owner "${UPSTREAM_OWNER}" \
             --arg upstream_repo "${UPSTREAM_REPO}" \
-            --arg upstream_ref "${UPSTREAM_REF}" \
-            --arg upstream_sha "${{ steps.check.outputs.upstream_sha }}" \
-            --arg rust_digest "${{ steps.check.outputs.rust_digest }}" \
-            --arg distroless_digest "${{ steps.check.outputs.distroless_digest }}" \
+            --arg release_tag "${{ steps.check.outputs.release_tag }}" \
+            --arg release_sha "${{ steps.check.outputs.release_sha }}" \
             --arg built_at_utc "${now}" \
             '{
               upstream: {
                 owner: $upstream_owner,
-                repo: $upstream_repo,
-                ref: $upstream_ref
+                repo: $upstream_repo
               },
-              upstream_sha: $upstream_sha,
-              base_images: {
-                rust_alpine_manifest_digest: $rust_digest,
-                distroless_static_nonroot_manifest_digest: $distroless_digest
-              },
+              release_tag: $release_tag,
+              release_sha: $release_sha,
               built_at_utc: $built_at_utc
             }' > "${STATE_FILE}"
 
@@ -194,5 +213,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "ci: update build state (telemt ${{ steps.check.outputs.short_sha }})"
+          git commit -m "ci: update build state (release ${{ steps.check.outputs.release_tag }})"
           git push
