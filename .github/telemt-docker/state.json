@@ -1,13 +1,9 @@
 {
   "upstream": {
     "owner": "telemt",
-    "repo": "telemt",
-    "ref": "main"
+    "repo": "telemt"
   },
-  "upstream_sha": "364bc6e278be72869c437c869a38dac615df7f31",
-  "base_images": {
-    "rust_alpine_manifest_digest": "sha256:69d7b9d9aeaf108a1419d9a7fcf7860dcc043e9dbd1ab7ce88e44228774d99e9",
-    "distroless_static_nonroot_manifest_digest": "sha256:f9f84bd968430d7d35e8e6d55c40efb0b980829ec42920a49e60e65eac0d83fc"
-  },
-  "built_at_utc": "2026-02-11T20:16:08Z"
+  "release_tag": "1.1.1.0",
+  "release_sha": "3881ba9bedac837de7032ea3984f0e1c93bfb3ec",
+  "built_at_utc": "2026-02-12T10:11:11Z"
 }
