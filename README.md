@@ -42,46 +42,12 @@ openssl rand -hex 16
 ```
 
 ### 2. Create `telemt.toml`
-Create `./telemt.toml` (minimal example, adjust as needed):
 
-```toml
-show_link = ["docker"]
+Refer to the upstream repository for the configuration format and examples:
 
-[general]
-prefer_ipv6 = false
-fast_mode = true
-use_middle_proxy = false
+👉 **https://github.com/telemt/telemt**
 
-[general.modes]
-classic = false
-secure = false
-tls = true
-
-[server]
-port = 443
-listen_addr_ipv4 = "0.0.0.0"
-listen_addr_ipv6 = "::"
-# metrics_port = 9090
-# metrics_whitelist = ["127.0.0.1", "::1"]
-
-[censorship]
-tls_domain = "example.com"
-mask = true
-mask_port = 443
-fake_cert_len = 2048
-
-[access]
-replay_check_len = 65536
-ignore_time_skew = false
-
-[access.users]
-docker = "0123456789abcdef0123456789abcdef"
-
-[[upstreams]]
-type = "direct"
-enabled = true
-weight = 10
-```
+Place your configuration file as `./telemt.toml`.
 
 ### 3. Create `docker-compose.yml`
 
