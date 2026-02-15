@@ -32,7 +32,6 @@ RUN --mount=type=cache,target=/root/.cache/git \
         && git fetch --depth=1 origin "${TELEMT_REF}" \
         && git checkout --detach FETCH_HEAD)
 
-# rustfmt нужен для cargo fmt
 RUN rustup component add rustfmt
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -44,10 +43,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     \
     if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi; \
     \
-    # best-effort fixes (не валим билд, если что-то не применилось)
     (cargo fix --bin "telemt" -p telemt --allow-dirty --allow-staged || true); \
     \
-    # после fix — снова форматируем
     cargo fmt --all; \
     \
     cargo build --release --locked --bin telemt; \
@@ -56,12 +53,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     install -Dm755 target/release/telemt /out/telemt; \
     strip /out/telemt; \
     \
-    # distroless/static требует полностью статический бинарь:
-    # у динамического ELF будет INTERP
     if readelf -lW /out/telemt | grep -q "Requesting program interpreter"; then \
-      echo "ERROR: telemt is dynamically linked (has INTERP) -> cannot run in gcr.io/distroless/static"; \
+      echo "ERROR: telemt is dynamically linked -> cannot run in distroless/static"; \
       exit 1; \
     fi
+
+# Создаём writable директорию для nonroot (uid 65534)
+RUN mkdir -p /cache && chown 65534:65534 /cache
 
 FROM gcr.io/distroless/static:nonroot AS runtime
 
@@ -69,6 +67,12 @@ STOPSIGNAL SIGINT
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/telemt /usr/local/bin/telemt
+
+# Writable directory owned by nonroot — сюда попадёт proxy-secret
+COPY --chown=65534:65534 --from=build /cache /cache
+
+# CWD = /cache, поэтому запись в "proxy-secret" → /cache/proxy-secret
+WORKDIR /cache
 
 EXPOSE 443/tcp 9090/tcp
 
