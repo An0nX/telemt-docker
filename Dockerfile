@@ -58,9 +58,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       exit 1; \
     fi
 
-# Создаём writable директорию для nonroot (uid 65534)
-RUN mkdir -p /cache && chown 65534:65534 /cache
-
 FROM gcr.io/distroless/static:nonroot AS runtime
 
 STOPSIGNAL SIGINT
@@ -68,11 +65,7 @@ STOPSIGNAL SIGINT
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/telemt /usr/local/bin/telemt
 
-# Writable directory owned by nonroot — сюда попадёт proxy-secret
-COPY --chown=65534:65534 --from=build /cache /cache
-
-# CWD = /cache, поэтому запись в "proxy-secret" → /cache/proxy-secret
-WORKDIR /cache
+WORKDIR /tmp
 
 EXPOSE 443/tcp 9090/tcp
 
