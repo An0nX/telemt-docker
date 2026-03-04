@@ -91,6 +91,15 @@ services:
         limits:
           cpus: "0.50"
           memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+    # Лимиты файловых дескрипторов (КРИТИЧНО для высоконагруженного сервера!)
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
 
     logging:
       driver: json-file
